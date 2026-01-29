@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="auth">
+  <div class="panel auth-card">
+    <h2>Admin Setup</h2>
+    {% if request.query_params.get('error') %}
+      <div class="alert">Passwords did not match.</div>
+    {% endif %}
+    <p class="auth-note">Create the first admin account. If this page redirects, an admin already exists.</p>
+    <form method="post" action="/admin/setup" class="auth-form">
+      <label>
+        <span>Username</span>
+        <input type="text" name="username" required />
+      </label>
+      <label>
+        <span>Timezone</span>
+        <select name="timezone">
+          {% set tz = user_timezone or 'America/New_York' %}
+          {% for option in [
+            'America/New_York','America/Chicago','America/Denver','America/Los_Angeles','America/Phoenix','America/Anchorage',
+            'Pacific/Honolulu','Europe/London','Europe/Berlin','Europe/Paris','Europe/Madrid','Europe/Rome','Europe/Amsterdam',
+            'Asia/Tokyo','Asia/Seoul','Asia/Singapore','Asia/Kolkata','Asia/Dubai','Australia/Sydney'
+          ] %}
+            <option value="{{ option }}" {% if tz == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Password</span>
+        <input type="password" name="password" required />
+      </label>
+      <label>
+        <span>Confirm Password</span>
+        <input type="password" name="confirm_password" required />
+      </label>
+      <button class="btn" type="submit">Create Admin</button>
+    </form>
+    <p class="auth-note">Already configured? <a href="/admin/login">Sign in</a>.</p>
+  </div>
+</section>
+{% endblock %}

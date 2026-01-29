@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% include "widgets.html" %}
+
+<section class="admin-panel">
+  <div class="panel">
+    <h2>Widget Visibility</h2>
+    <div class="toggle-grid">
+      {% for widget in widgets %}
+      <label class="toggle">
+        <input type="checkbox" data-widget-toggle value="{{ widget.widget_key }}" {% if widget.enabled %}checked{% endif %} />
+        <span>{{ widget.title }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Integrations</h2>
+    <div class="integration" data-integration="kuma">
+      <div class="integration-header">
+        <h3>Uptime Kuma</h3>
+        <button class="btn subtle" data-test-kuma>Test</button>
+      </div>
+      <div class="form-grid">
+        <label>
+          <span>Enabled</span>
+          <input type="checkbox" data-setting="kuma_config.enabled" {% if settings.kuma_config.enabled %}checked{% endif %} />
+        </label>
+        <label>
+          <span>Base URL</span>
+          <input type="text" data-setting="kuma_config.base_url" value="{{ settings.kuma_config.base_url }}" placeholder="http://kuma:3001" />
+        </label>
+        <label>
+          <span>Status Page Slug</span>
+          <input type="text" data-setting="kuma_config.status_page_slug" value="{{ settings.kuma_config.status_page_slug }}" placeholder="public-page" />
+        </label>
+        <label>
+          <span>Metrics Path</span>
+          <input type="text" data-setting="kuma_config.metrics_path" value="{{ settings.kuma_config.metrics_path }}" placeholder="/metrics" />
+        </label>
+        <label>
+          <span>Auth Header</span>
+          <input type="password" data-setting="kuma_config.auth_header" value="{{ settings.kuma_config.auth_header }}" placeholder="Bearer ..." />
+        </label>
+      </div>
+      <div class="integration-status" data-kuma-status-msg></div>
+    </div>
+
+    <div class="integration" data-integration="pelican">
+      <div class="integration-header">
+        <h3>Pelican Panel</h3>
+      </div>
+      <div class="form-grid">
+        <label>
+          <span>Enabled</span>
+          <input type="checkbox" data-setting="pelican_config.enabled" {% if settings.pelican_config.enabled %}checked{% endif %} />
+        </label>
+        <label>
+          <span>Base URL</span>
+          <input type="text" data-setting="pelican_config.base_url" value="{{ settings.pelican_config.base_url }}" placeholder="https://panel.example.com" />
+        </label>
+        <label>
+          <span>API Key</span>
+          <input type="password" data-setting="pelican_config.api_key" value="{{ settings.pelican_config.api_key }}" />
+        </label>
+        <label>
+          <span>Server ID</span>
+          <input type="text" data-setting="pelican_config.server_id" value="{{ settings.pelican_config.server_id }}" placeholder="abcdef" />
+        </label>
+        <label>
+          <span>Server Name</span>
+          <input type="text" data-setting="pelican_config.server_name" value="{{ settings.pelican_config.server_name }}" placeholder="Palworld" />
+        </label>
+      </div>
+      <div class="integration-status">Schedules load into the calendar widget and can be created from it.</div>
+    </div>
+
+    <div class="integration" data-integration="discord">
+      <div class="integration-header">
+        <h3>Discord</h3>
+      </div>
+      <div class="form-grid">
+        <label>
+          <span>Enabled</span>
+          <input type="checkbox" data-setting="discord_config.enabled" {% if settings.discord_config.enabled %}checked{% endif %} />
+        </label>
+        <label>
+          <span>Bot Token</span>
+          <input type="password" data-setting="discord_config.bot_token" value="{{ settings.discord_config.bot_token }}" />
+        </label>
+        <label>
+          <span>Guild ID</span>
+          <input type="text" data-setting="discord_config.guild_id" value="{{ settings.discord_config.guild_id }}" />
+        </label>
+        <label>
+          <span>Channel ID</span>
+          <input type="text" data-setting="discord_config.channel_id" value="{{ settings.discord_config.channel_id }}" />
+        </label>
+      </div>
+      <div class="integration-status">Discord auth and chat streaming are coming next.</div>
+    </div>
+
+    <div class="panel-actions">
+      <button class="btn" data-save-settings>Save settings</button>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/admin.js"></script>
+{% endblock %}

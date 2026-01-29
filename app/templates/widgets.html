@@ -1,0 +1,74 @@
+<section class="dashboard">
+  <div class="grid" id="widgetGrid">
+    {% for widget in widgets %}
+    {% if widget.enabled %}
+    <article
+      class="widget"
+      data-widget-key="{{ widget.widget_key }}"
+      data-x="{{ widget.x }}"
+      data-y="{{ widget.y }}"
+      data-w="{{ widget.w }}"
+      data-h="{{ widget.h }}"
+      style="--x: {{ widget.x }}; --y: {{ widget.y }}; --w: {{ widget.w }}; --h: {{ widget.h }};"
+    >
+      <header class="widget-header">
+        <div>
+          <div class="widget-title">{{ widget.title }}</div>
+          <div class="widget-meta" id="meta-{{ widget.widget_key }}"></div>
+        </div>
+      </header>
+
+      <div class="widget-body {% if widget.widget_key != 'calendar' %}scrollable{% endif %}">
+        {% if widget.widget_key == 'kuma' %}
+          <div class="kuma-status" data-kuma-status>
+            <div class="status-empty">Waiting for Uptime Kuma configuration.</div>
+          </div>
+        {% elif widget.widget_key == 'calendar' %}
+          <div class="calendar" data-pelican-server-name="{{ settings.pelican_config.server_name if settings and settings.pelican_config else 'Server' }}">
+            <div class="calendar-toolbar">
+              <div>
+                <div class="calendar-title" data-calendar-title>Calendar</div>
+                <div class="calendar-subtitle" id="meta-calendar">Syncing schedules...</div>
+              </div>
+              <div class="calendar-nav">
+                <button class="icon-btn" data-cal-prev title="Previous month">&lt;</button>
+                <button class="icon-btn" data-cal-today title="Today">Today</button>
+                <button class="icon-btn" data-cal-next title="Next month">&gt;</button>
+                {% if is_admin %}
+                <button class="btn subtle" data-calendar-create type="button">Create</button>
+                {% endif %}
+              </div>
+            </div>
+            <div class="calendar-shell">
+              <div class="calendar-sources">
+                <div class="calendar-banner">Sources</div>
+                <div class="calendar-filters" data-calendar-filters></div>
+              </div>
+              <div class="calendar-grid">
+                <div class="calendar-weekdays" data-calendar-weekdays></div>
+                <div class="calendar-cells" data-calendar-cells></div>
+              </div>
+            </div>
+          </div>
+        {% elif widget.widget_key == 'discord' %}
+          <div class="discord">
+            <div class="discord-banner">Live chat preview</div>
+            <div class="discord-feed" data-discord-feed>
+              <div class="discord-empty">Connect Discord to show messages here.</div>
+            </div>
+          </div>
+        {% else %}
+          <div>Widget not configured.</div>
+        {% endif %}
+      </div>
+      {% if is_admin %}
+      <div class="widget-handle handle-tl" data-resize="tl"></div>
+      <div class="widget-handle handle-tr" data-resize="tr"></div>
+      <div class="widget-handle handle-bl" data-resize="bl"></div>
+      <div class="widget-handle handle-br" data-resize="br"></div>
+      {% endif %}
+    </article>
+    {% endif %}
+    {% endfor %}
+  </div>
+</section>

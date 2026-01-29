@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en" data-theme-mode="auto">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title }}</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body data-admin="{{ 'true' if is_admin else 'false' }}" data-timezone="{{ user_timezone or 'America/New_York' }}">
+    <div class="glow"></div>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">UA</span>
+        <div>
+          <div class="brand-title">Uptime Atlas</div>
+          <div class="brand-sub">Community ops dashboard</div>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <div class="theme-toggle" role="group" aria-label="Theme">
+          <button class="chip" data-theme-choice="auto">Auto</button>
+          <button class="chip" data-theme-choice="light">Light</button>
+          <button class="chip" data-theme-choice="dark">Dark</button>
+        </div>
+        {% if is_authenticated %}
+          {% if is_admin %}
+          <button class="btn subtle" type="button" data-edit-toggle>Edit</button>
+          {% endif %}
+          <a class="btn subtle" href="/profile">Profile</a>
+          <form method="post" action="/admin/logout">
+            <button class="btn" type="submit">Sign out</button>
+          </form>
+        {% else %}
+          <a class="btn" href="/admin/login">Login</a>
+        {% endif %}
+      </div>
+    </header>
+
+    <main class="page">
+      {% block content %}{% endblock %}
+    </main>
+
+    {% if is_admin %}
+    <div class="modal" data-modal="calendar">
+      <div class="modal-backdrop" data-modal-close></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Create schedule</h3>
+          <button class="icon-btn" data-modal-close type="button">✕</button>
+        </div>
+        <form class="modal-body" data-calendar-form>
+          <label>
+            <span>Source</span>
+            <input type="text" name="source" placeholder="Palworld" />
+          </label>
+          <label>
+            <span>Name</span>
+            <input type="text" name="name" placeholder="UA: Weekly uptime" required />
+          </label>
+          <label>
+            <span>Minute</span>
+            <input type="text" name="minute" placeholder="0" required />
+          </label>
+          <label>
+            <span>Hour</span>
+            <input type="text" name="hour" placeholder="18" required />
+          </label>
+          <label>
+            <span>Day of Month</span>
+            <input type="text" name="day_of_month" placeholder="*" required />
+          </label>
+          <label>
+            <span>Month</span>
+            <input type="text" name="month" placeholder="*" required />
+          </label>
+          <label>
+            <span>Day of Week</span>
+            <input type="text" name="day_of_week" placeholder="1-5" required />
+          </label>
+          <label class="toggle">
+            <input type="checkbox" name="is_active" checked />
+            <span>Active</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" name="only_when_online" />
+            <span>Only when online</span>
+          </label>
+          <div class="modal-actions">
+            <button class="btn subtle" type="submit">Create schedule</button>
+            <div class="integration-status" data-calendar-status></div>
+          </div>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+    <script src="/static/app.js"></script>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

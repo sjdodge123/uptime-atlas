@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="profile">
+  <div class="panel">
+    <h2>Profile</h2>
+    <div class="form-grid">
+      <label>
+        <span>Timezone</span>
+        <select data-profile-timezone>
+          {% set tz = user_timezone or 'America/New_York' %}
+          {% for option in [
+            'America/New_York','America/Chicago','America/Denver','America/Los_Angeles','America/Phoenix','America/Anchorage',
+            'Pacific/Honolulu','Europe/London','Europe/Berlin','Europe/Paris','Europe/Madrid','Europe/Rome','Europe/Amsterdam',
+            'Asia/Tokyo','Asia/Seoul','Asia/Singapore','Asia/Kolkata','Asia/Dubai','Australia/Sydney'
+          ] %}
+            <option value="{{ option }}" {% if tz == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Change Password</h2>
+    <form class="auth-form" data-password-form>
+      <label>
+        <span>Current Password</span>
+        <input type="password" name="current_password" required />
+      </label>
+      <label>
+        <span>New Password</span>
+        <input type="password" name="new_password" required />
+      </label>
+      <button class="btn" type="submit">Update Password</button>
+      <div class="integration-status" data-password-status></div>
+    </form>
+  </div>
+
+  {% if is_root %}
+  <div class="panel">
+    <h2>OAuth Allowlist</h2>
+    <div class="form-grid">
+      <label>
+        <span>Google Emails</span>
+        <input type="text" data-oauth-allow="google_emails" value="{{ settings.oauth_allowlist.google_emails }}" placeholder="you@example.com,friend@example.com" />
+      </label>
+      <label>
+        <span>Discord User IDs</span>
+        <input type="text" data-oauth-allow="discord_ids" value="{{ settings.oauth_allowlist.discord_ids }}" placeholder="123456789012345678" />
+      </label>
+      <label>
+        <span>Steam IDs</span>
+        <input type="text" data-oauth-allow="steam_ids" value="{{ settings.oauth_allowlist.steam_ids }}" placeholder="76561198000000000" />
+      </label>
+    </div>
+    <div class="panel-actions">
+      <button class="btn" data-save-oauth>Save allowlist</button>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if is_root %}
+  <div class="panel">
+    <h2>User Access</h2>
+    <div class="integration-status">Assign admin access to existing users.</div>
+    <div class="user-table" data-users-table></div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/profile.js"></script>
+{% endblock %}
