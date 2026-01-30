@@ -1,14 +1,18 @@
 import base64
 import binascii
+import calendar
 import hashlib
 import json
-import os
-import secrets
 import logging
-import urllib.parse
+import os
+import re
+import secrets
 import urllib.error
+import urllib.parse
 import urllib.request
-from typing import Any, Dict, List, Optional
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -21,6 +25,7 @@ from . import db
 
 APP_TITLE = "Uptime Atlas"
 SESSION_SECRET_ENV = "UPTIME_ATLAS_SESSION_SECRET"
+SESSION_MAX_AGE_SECONDS = 60 * 60 * 24
 ADMIN_USER_ENV = "UPTIME_ATLAS_ADMIN_USER"
 ADMIN_PASSWORD_ENV = "UPTIME_ATLAS_ADMIN_PASSWORD"
 GOOGLE_CLIENT_ID_ENV = "UPTIME_ATLAS_GOOGLE_CLIENT_ID"
@@ -44,7 +49,7 @@ DEFAULT_WIDGETS = [
     },
     {
         "widget_key": "calendar",
-        "title": "Server Calendar",
+        "title": "Events Calendar",
         "x": 8,
         "y": 1,
         "w": 5,
@@ -63,6 +68,13 @@ DEFAULT_WIDGETS = [
         "config": {},
     },
 ]
+
+
+def _get_widget_template(widget_key: str) -> Optional[Dict[str, Any]]:
+    for widget in DEFAULT_WIDGETS:
+        if widget.get("widget_key") == widget_key:
+            return widget
+    return None
 
 DEFAULT_SETTINGS = {
     "kuma_config": {
@@ -102,7 +114,7 @@ session_secret = os.environ.get(SESSION_SECRET_ENV)
 if not session_secret:
     session_secret = secrets.token_hex(32)
 
-app.add_middleware(SessionMiddleware, secret_key=session_secret)
+app.add_middleware(SessionMiddleware, secret_key=session_secret, max_age=SESSION_MAX_AGE_SECONDS)
 
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
@@ -257,7 +269,13 @@ def require_login(request: Request) -> None:
 def _load_settings() -> Dict[str, Any]:
     settings = db.get_all_settings()
     for key, value in DEFAULT_SETTINGS.items():
-        settings.setdefault(key, value)
+        if key not in settings:
+            settings[key] = value
+            continue
+        if isinstance(value, dict) and isinstance(settings.get(key), dict):
+            merged = value.copy()
+            merged.update(settings[key])
+            settings[key] = merged
     return settings
 
 
@@ -310,6 +328,17 @@ def _request_json(
 def _request_form(url: str, payload: Dict[str, str], timeout: int = 6) -> str:
     data = urllib.parse.urlencode(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8")
+
+
+def _request_raw(
+    url: str,
+    method: str = "GET",
+    headers: Optional[Dict[str, str]] = None,
+    timeout: int = 6,
+) -> str:
+    req = urllib.request.Request(url, headers=headers or {}, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read().decode("utf-8")
 
@@ -390,7 +419,13 @@ def _fetch_kuma_summary(config: Dict[str, Any]) -> Dict[str, Any]:
         monitors = _parse_prometheus_metrics(payload)
         return {"ok": True, "source": "metrics", "monitors": monitors}
     except urllib.error.HTTPError as exc:
-        return {"ok": False, "reason": f"http_{exc.code}"}
+        retry_after = None
+        if getattr(exc, "code", None) == 429:
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        payload: Dict[str, Any] = {"ok": False, "reason": f"http_{exc.code}"}
+        if retry_after:
+            payload["retry_after"] = retry_after
+        return payload
     except urllib.error.URLError:
         return {"ok": False, "reason": "unreachable"}
     except json.JSONDecodeError:
@@ -403,19 +438,18 @@ def _pelican_headers(api_key: str) -> Dict[str, str]:
         "Accept": "Application/vnd.pterodactyl.v1+json",
     }
 
-
 def _fetch_pelican_schedules(config: Dict[str, Any]) -> Dict[str, Any]:
     if not config.get("enabled"):
-        return {"ok": False, "reason": "disabled"}
+        return {"ok": False, "reason": "disabled", "schedules": []}
     base_url = (config.get("base_url") or "").rstrip("/")
     if not base_url:
-        return {"ok": False, "reason": "missing_base_url"}
+        return {"ok": False, "reason": "missing_base_url", "schedules": []}
     api_key = (config.get("api_key") or "").strip()
     if not api_key:
-        return {"ok": False, "reason": "missing_api_key"}
+        return {"ok": False, "reason": "missing_api_key", "schedules": []}
     server_id = (config.get("server_id") or "").strip()
     if not server_id:
-        return {"ok": False, "reason": "missing_server_id"}
+        return {"ok": False, "reason": "missing_server_id", "schedules": []}
     timeout = int(config.get("timeout_sec") or 6)
 
     url = f"{base_url}/api/client/servers/{server_id}/schedules"
@@ -425,17 +459,18 @@ def _fetch_pelican_schedules(config: Dict[str, Any]) -> Dict[str, Any]:
         schedules: List[Dict[str, Any]] = []
         for entry in raw_list:
             attrs = entry.get("attributes", {}) if isinstance(entry, dict) else {}
+            cron_source = attrs.get("cron") if isinstance(attrs.get("cron"), dict) else attrs
             def _cron_value(value: Any) -> str:
                 if value is None or value == "":
                     return "*"
                 return str(value)
 
             cron = {
-                "minute": _cron_value(attrs.get("minute")),
-                "hour": _cron_value(attrs.get("hour")),
-                "day_of_month": _cron_value(attrs.get("day_of_month")),
-                "month": _cron_value(attrs.get("month")),
-                "day_of_week": _cron_value(attrs.get("day_of_week")),
+                "minute": _cron_value(cron_source.get("minute")),
+                "hour": _cron_value(cron_source.get("hour")),
+                "day_of_month": _cron_value(cron_source.get("day_of_month")),
+                "month": _cron_value(cron_source.get("month")),
+                "day_of_week": _cron_value(cron_source.get("day_of_week")),
             }
             cron_expression = " ".join(
                 cron.get(key, "*") for key in ("minute", "hour", "day_of_month", "month", "day_of_week")
@@ -451,71 +486,384 @@ def _fetch_pelican_schedules(config: Dict[str, Any]) -> Dict[str, Any]:
                     "updated_at": attrs.get("updated_at"),
                 }
             )
-        return {"ok": True, "schedules": schedules}
-    except urllib.error.HTTPError as exc:
-        return {"ok": False, "reason": f"http_{exc.code}"}
-    except urllib.error.URLError:
-        return {"ok": False, "reason": "unreachable"}
-    except json.JSONDecodeError:
-        return {"ok": False, "reason": "invalid_json"}
-
-
-def _create_pelican_schedule(config: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
-    if not config.get("enabled"):
-        return {"ok": False, "reason": "disabled"}
-    base_url = (config.get("base_url") or "").rstrip("/")
-    if not base_url:
-        return {"ok": False, "reason": "missing_base_url"}
-    api_key = (config.get("api_key") or "").strip()
-    if not api_key:
-        return {"ok": False, "reason": "missing_api_key"}
-    server_id = (config.get("server_id") or "").strip()
-    if not server_id:
-        return {"ok": False, "reason": "missing_server_id"}
-    timeout = int(config.get("timeout_sec") or 6)
-
-    required = ["name", "minute", "hour", "day_of_month", "month", "day_of_week"]
-    if not all(key in payload and str(payload[key]).strip() != "" for key in required):
-        return {"ok": False, "reason": "missing_fields"}
-
-    body = {
-        "name": str(payload["name"]).strip(),
-        "minute": str(payload["minute"]).strip(),
-        "hour": str(payload["hour"]).strip(),
-        "day_of_month": str(payload["day_of_month"]).strip(),
-        "month": str(payload["month"]).strip(),
-        "day_of_week": str(payload["day_of_week"]).strip(),
-        "is_active": bool(payload.get("is_active", True)),
-        "only_when_online": bool(payload.get("only_when_online", False)),
-    }
-
-    url = f"{base_url}/api/client/servers/{server_id}/schedules"
-    try:
-        data = _request_json(
-            url,
-            method="POST",
-            headers=_pelican_headers(api_key),
-            payload=body,
-            timeout=timeout,
-        )
-        attrs = data.get("attributes", data) if isinstance(data, dict) else {}
         return {
             "ok": True,
-            "schedule": {
-                "id": attrs.get("id") or attrs.get("uuid"),
-                "name": attrs.get("name") or body["name"],
-                "cron_expression": " ".join(
-                    body[key] for key in ("minute", "hour", "day_of_month", "month", "day_of_week")
-                ),
-                "is_active": attrs.get("is_active", body["is_active"]),
-            },
+            "schedules": schedules,
+            "source": "pelican",
         }
     except urllib.error.HTTPError as exc:
-        return {"ok": False, "reason": f"http_{exc.code}"}
+        return {"ok": False, "reason": f"http_{exc.code}", "schedules": []}
     except urllib.error.URLError:
-        return {"ok": False, "reason": "unreachable"}
+        return {"ok": False, "reason": "unreachable", "schedules": []}
     except json.JSONDecodeError:
-        return {"ok": False, "reason": "invalid_json"}
+        return {"ok": False, "reason": "invalid_json", "schedules": []}
+
+
+def _calendar_window(now: Optional[datetime] = None) -> Tuple[datetime, datetime]:
+    current = now or datetime.now(timezone.utc)
+    start = datetime(current.year, current.month, 1, tzinfo=timezone.utc)
+    end = _add_months(start, 3)
+    return start, end
+
+
+def _add_months(value: datetime, months: int) -> datetime:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
+
+
+def _to_utc_iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _parse_schedule_label(name: str, server_name: str) -> Tuple[str, str, str]:
+    raw = (name or "Schedule").strip() or "Schedule"
+    lower = raw.lower()
+    kind = "single"
+    if re.search(r"\bstart\b", lower):
+        kind = "start"
+    elif re.search(r"\bstop\b", lower):
+        kind = "stop"
+    base_label = re.sub(r"\b(start|stop)\b", "", raw, flags=re.IGNORECASE).strip() or raw
+    game_name = server_name
+    event_name = base_label
+    if ":" in base_label:
+        game_part, event_part = base_label.split(":", 1)
+        game_name = game_part.strip() or server_name
+        event_name = event_part.strip() or "Event"
+    else:
+        event_name = base_label.strip() or "Event"
+    return game_name, event_name, kind
+
+
+def _parse_cron_field(
+    value: Any,
+    min_value: int,
+    max_value: int,
+    mapping: Optional[Dict[str, int]] = None,
+    normalize: Optional[Any] = None,
+    wrap: bool = False,
+) -> Dict[str, Any]:
+    raw = "" if value is None else str(value).strip().lower()
+    if not raw or raw in {"*", "?"}:
+        return {"all": True, "values": []}
+    normalize_fn = normalize or (lambda num: num)
+    mapping = mapping or {}
+    values: set[int] = set()
+
+    def resolve_token(token: str) -> Optional[int]:
+        if not token:
+            return None
+        token = token.strip().lower()
+        if token in mapping:
+            return int(mapping[token])
+        if token == "*":
+            return None
+        try:
+            return int(token)
+        except ValueError:
+            return None
+
+    def add_value(num: int) -> None:
+        normalized = normalize_fn(num)
+        if not isinstance(normalized, int):
+            return
+        if normalized < min_value or normalized > max_value:
+            return
+        values.add(normalized)
+
+    for part in [chunk.strip() for chunk in raw.split(",") if chunk.strip()]:
+        range_part, step_part = (part.split("/", 1) + [""])[:2]
+        step = 1
+        if step_part:
+            try:
+                step = int(step_part)
+            except ValueError:
+                continue
+            if step <= 0:
+                continue
+
+        if range_part == "*":
+            start = min_value
+            end = max_value
+        elif "-" in range_part:
+            start_token, end_token = (segment.strip() for segment in range_part.split("-", 1))
+            start_value = resolve_token(start_token)
+            end_value = resolve_token(end_token)
+            if start_value is None or end_value is None:
+                continue
+            start = start_value
+            end = end_value
+        else:
+            single = resolve_token(range_part)
+            if single is None:
+                continue
+            start = single
+            end = single
+
+        if start > end and wrap:
+            for value in range(start, max_value + 1, step):
+                add_value(value)
+            for value in range(min_value, end + 1, step):
+                add_value(value)
+            continue
+
+        for value in range(start, end + 1, step):
+            add_value(value)
+
+    return {"all": False, "values": sorted(values)}
+
+
+def _build_time_slots(hour_field: Dict[str, Any], minute_field: Dict[str, Any]) -> List[Tuple[int, int]]:
+    hour_values = hour_field.get("values", [])
+    minute_values = minute_field.get("values", [])
+    if hour_field.get("all") and minute_field.get("all"):
+        return [(0, 0)]
+    if hour_field.get("all") and minute_values:
+        return [(0, int(minute_values[0]))]
+    if minute_field.get("all") and hour_values:
+        return [(int(hour_values[0]), 0)]
+    if hour_field.get("all") or minute_field.get("all"):
+        return [(0, 0)]
+    combos = [(int(hour), int(minute)) for hour in hour_values for minute in minute_values]
+    if not combos:
+        return []
+    if len(combos) > 8:
+        return [combos[0]]
+    return combos
+
+
+def _generate_schedule_occurrences(
+    cron: Dict[str, Any],
+    window_start: datetime,
+    window_end: datetime,
+) -> List[datetime]:
+    month_map = {
+        "jan": 1,
+        "feb": 2,
+        "mar": 3,
+        "apr": 4,
+        "may": 5,
+        "jun": 6,
+        "jul": 7,
+        "aug": 8,
+        "sep": 9,
+        "oct": 10,
+        "nov": 11,
+        "dec": 12,
+    }
+    weekday_map = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
+    month_field = _parse_cron_field(cron.get("month", "*"), 1, 12, mapping=month_map)
+    day_of_week_field = _parse_cron_field(
+        cron.get("day_of_week", "*"),
+        0,
+        6,
+        mapping=weekday_map,
+        normalize=lambda value: 0 if value == 7 else value,
+        wrap=True,
+    )
+    hour_field = _parse_cron_field(cron.get("hour", "*"), 0, 23)
+    minute_field = _parse_cron_field(cron.get("minute", "*"), 0, 59)
+
+    occurrences: List[datetime] = []
+    cursor = window_start.date()
+    end_date = window_end.date()
+
+    while cursor < end_date:
+        if not month_field["all"] and cursor.month not in month_field["values"]:
+            cursor += timedelta(days=1)
+            continue
+        last_day = calendar.monthrange(cursor.year, cursor.month)[1]
+        day_of_month_field = _parse_cron_field(cron.get("day_of_month", "*"), 1, last_day)
+        day = cursor.day
+        utc_date = datetime(cursor.year, cursor.month, cursor.day, tzinfo=timezone.utc)
+        dow = (utc_date.weekday() + 1) % 7
+
+        dom_all = day_of_month_field["all"]
+        dow_all = day_of_week_field["all"]
+        dom_matches = dom_all or day in day_of_month_field["values"]
+        dow_matches = dow_all or dow in day_of_week_field["values"]
+
+        if dom_all and dow_all:
+            matches = True
+        elif dom_all:
+            matches = dow_matches
+        elif dow_all:
+            matches = dom_matches
+        else:
+            matches = dom_matches or dow_matches
+
+        if matches:
+            for hour, minute in _build_time_slots(hour_field, minute_field):
+                occurrence = datetime(cursor.year, cursor.month, cursor.day, hour, minute, tzinfo=timezone.utc)
+                if window_start <= occurrence < window_end:
+                    occurrences.append(occurrence)
+
+        cursor += timedelta(days=1)
+
+    return occurrences
+
+
+def _pair_schedule_occurrences(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[Tuple[str, str], Dict[str, List[Dict[str, Any]]]] = {}
+    events: List[Dict[str, Any]] = []
+    for item in items:
+        kind = item.get("kind")
+        if kind in {"start", "stop"}:
+            key = (item["game_name"], item["event_name"])
+            grouped.setdefault(key, {"starts": [], "stops": []})
+            if kind == "start":
+                grouped[key]["starts"].append(item)
+            else:
+                grouped[key]["stops"].append(item)
+            continue
+        events.append(item)
+
+    for group in grouped.values():
+        starts = sorted(group["starts"], key=lambda value: value["occurrence"])
+        stops = sorted(group["stops"], key=lambda value: value["occurrence"])
+        used_stops: set[int] = set()
+        for start in starts:
+            chosen_index = None
+            for idx, stop in enumerate(stops):
+                if idx in used_stops:
+                    continue
+                if stop["occurrence"] <= start["occurrence"]:
+                    continue
+                if stop["occurrence"] - start["occurrence"] > timedelta(hours=36):
+                    continue
+                chosen_index = idx
+                break
+            if chosen_index is not None:
+                stop = stops[chosen_index]
+                used_stops.add(chosen_index)
+                events.append(
+                    {
+                        "schedule_id": start["schedule_id"],
+                        "game_name": start["game_name"],
+                        "event_name": start["event_name"],
+                        "occurrence": start["occurrence"],
+                        "stop_occurrence": stop["occurrence"],
+                    }
+                )
+            else:
+                events.append(
+                    {
+                        "schedule_id": start["schedule_id"],
+                        "game_name": start["game_name"],
+                        "event_name": start["event_name"],
+                        "occurrence": start["occurrence"],
+                        "stop_occurrence": None,
+                    }
+                )
+        for idx, stop in enumerate(stops):
+            if idx in used_stops:
+                continue
+            events.append(
+                {
+                    "schedule_id": stop["schedule_id"],
+                    "game_name": stop["game_name"],
+                    "event_name": stop["event_name"],
+                    "occurrence": stop["occurrence"],
+                    "stop_occurrence": None,
+                }
+            )
+
+    return events
+
+
+def _sync_pelican_events(config: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
+    window_start, window_end = _calendar_window()
+    result = _fetch_pelican_schedules(config)
+    if not result.get("ok"):
+        return result
+    schedules = result.get("schedules") or []
+    server_name = (config.get("server_name") or "Server").strip() or "Server"
+    occurrences: List[Dict[str, Any]] = []
+    for schedule in schedules:
+        schedule_id = schedule.get("id")
+        if not schedule_id:
+            continue
+        name = schedule.get("name") or "Schedule"
+        cron = schedule.get("cron") or {}
+        game_name, event_name, kind = _parse_schedule_label(name, server_name)
+        for occurrence in _generate_schedule_occurrences(cron, window_start, window_end):
+            occurrences.append(
+                {
+                    "schedule_id": str(schedule_id),
+                    "game_name": game_name,
+                    "event_name": event_name,
+                    "kind": kind,
+                    "occurrence": occurrence,
+                }
+            )
+
+    events = _pair_schedule_occurrences(occurrences)
+    start_iso = _to_utc_iso(window_start)
+    end_iso = _to_utc_iso(window_end)
+    db.delete_calendar_events_in_range(start_iso, end_iso, exclude_local=True, include_deleted=force)
+    for event in events:
+        game_id = db.get_or_create_game_id(event["game_name"])
+        db.upsert_calendar_event(
+            schedule_id=event["schedule_id"],
+            game_id=game_id,
+            event_name=event["event_name"],
+            start_utc=_to_utc_iso(event["occurrence"]),
+            stop_utc=_to_utc_iso(event["stop_occurrence"]) if event.get("stop_occurrence") else None,
+            description="",
+            created_by="Pelican",
+        )
+    result["events"] = len(events)
+    return result
+
+
+def _resync_pelican_source(config: Dict[str, Any], game: Dict[str, Any]) -> Dict[str, Any]:
+    result = _fetch_pelican_schedules(config)
+    if not result.get("ok"):
+        return result
+    game_name = (game.get("name") or "").strip()
+    if not game_name:
+        return {"ok": False, "reason": "missing_game"}
+    target_name = game_name.lower()
+    window_start, window_end = _calendar_window()
+    schedules = result.get("schedules") or []
+    server_name = (config.get("server_name") or "Server").strip() or "Server"
+    occurrences: List[Dict[str, Any]] = []
+    for schedule in schedules:
+        schedule_id = schedule.get("id")
+        if not schedule_id:
+            continue
+        name = schedule.get("name") or "Schedule"
+        cron = schedule.get("cron") or {}
+        parsed_game, event_name, kind = _parse_schedule_label(name, server_name)
+        if parsed_game.strip().lower() != target_name:
+            continue
+        for occurrence in _generate_schedule_occurrences(cron, window_start, window_end):
+            occurrences.append(
+                {
+                    "schedule_id": str(schedule_id),
+                    "game_name": parsed_game,
+                    "event_name": event_name,
+                    "kind": kind,
+                    "occurrence": occurrence,
+                }
+            )
+
+    events = _pair_schedule_occurrences(occurrences)
+    db.delete_calendar_events_by_game(int(game["id"]))
+    for event in events:
+        db.upsert_calendar_event(
+            schedule_id=event["schedule_id"],
+            game_id=int(game["id"]),
+            event_name=event["event_name"],
+            start_utc=_to_utc_iso(event["occurrence"]),
+            stop_utc=_to_utc_iso(event["stop_occurrence"]) if event.get("stop_occurrence") else None,
+            description="",
+            created_by="Pelican",
+        )
+    return {"ok": True, "events": len(events)}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -742,19 +1090,166 @@ async def pelican_schedules() -> JSONResponse:
     return JSONResponse(result)
 
 
-@app.post("/api/pelican/schedules")
-async def create_pelican_schedule(request: Request, _: None = Depends(require_admin)) -> JSONResponse:
+@app.post("/api/pelican/resync")
+async def pelican_resync(_: None = Depends(require_admin)) -> JSONResponse:
+    config = _load_settings().get("pelican_config", {})
+    result = _sync_pelican_events(config, force=True)
+    return JSONResponse(
+        {
+            "ok": bool(result.get("ok")),
+            "reason": result.get("reason"),
+            "events": result.get("events", 0),
+        }
+    )
+
+@app.get("/api/calendar/events")
+async def calendar_events() -> JSONResponse:
+    config = _load_settings().get("pelican_config", {})
+    sync_result = _sync_pelican_events(config)
+    window_start, window_end = _calendar_window()
+    events = db.list_calendar_events(
+        start_utc=_to_utc_iso(window_start),
+        end_utc=_to_utc_iso(window_end),
+    )
+    sources = db.list_games_with_stats()
+    sources = [source for source in sources if source["active_count"]]
+    payload = {
+        "ok": bool(sync_result.get("ok")),
+        "reason": sync_result.get("reason"),
+        "events": events,
+        "sources": sources,
+    }
+    if not sync_result.get("ok"):
+        payload["stale"] = True
+    return JSONResponse(payload)
+
+
+@app.post("/api/calendar/events")
+async def create_calendar_event(request: Request, _: None = Depends(require_admin)) -> JSONResponse:
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid payload")
+    game_name = str(payload.get("game") or "").strip()
+    event_name = str(payload.get("name") or "").strip()
+    start_utc = str(payload.get("start_utc") or "").strip()
+    stop_utc = str(payload.get("stop_utc") or "").strip()
+    description = str(payload.get("description") or "").strip()
+    if not game_name:
+        raise HTTPException(status_code=400, detail="Missing game")
+    if not event_name:
+        raise HTTPException(status_code=400, detail="Missing event name")
+    if not start_utc:
+        raise HTTPException(status_code=400, detail="Missing start time")
+    if stop_utc:
+        try:
+            start_dt = datetime.fromisoformat(start_utc.replace("Z", "+00:00"))
+            stop_dt = datetime.fromisoformat(stop_utc.replace("Z", "+00:00"))
+            if stop_dt <= start_dt:
+                raise HTTPException(status_code=400, detail="End time must be after start time")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid time format")
+    schedule_id = f"local_{uuid.uuid4().hex}"
+    created_by = str(request.session.get("user") or "").strip()
+    game_id = db.get_or_create_game_id(game_name)
+    event_id = db.insert_calendar_event(
+        schedule_id=schedule_id,
+        game_id=game_id,
+        event_name=event_name,
+        start_utc=start_utc,
+        stop_utc=stop_utc or None,
+        description=description,
+        created_by=created_by,
+    )
+    if not event_id:
+        raise HTTPException(status_code=500, detail="Failed to create event")
+    return JSONResponse(
+        {
+            "ok": True,
+            "event": {
+                "id": event_id,
+                "schedule_id": schedule_id,
+                "game_id": game_id,
+                "game_name": game_name,
+                "event_name": event_name,
+                "start_utc": start_utc,
+                "stop_utc": stop_utc or None,
+                "description": description,
+                "created_by": created_by,
+            },
+        }
+    )
+
+
+@app.delete("/api/calendar/events/{event_id}")
+async def delete_calendar_event(
+    event_id: int, request: Request, _: None = Depends(require_login)
+) -> JSONResponse:
+    event = db.get_calendar_event_by_id(event_id)
+    if not event or event.get("is_deleted"):
+        raise HTTPException(status_code=404, detail="Event not found")
+    if not _is_admin(request):
+        creator = event.get("created_by")
+        if not creator or creator != request.session.get("user"):
+            raise HTTPException(status_code=403, detail="Not authorized")
+    db.mark_calendar_event_deleted(event_id)
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/api/calendar/sources/{game_id}")
+async def delete_calendar_source(game_id: int, _: None = Depends(require_admin)) -> JSONResponse:
+    game = db.get_game_by_id(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Source not found")
+    updated = db.mark_calendar_events_deleted_by_game(game_id)
+    return JSONResponse({"ok": True, "deleted": updated})
+
+
+@app.post("/api/calendar/sources/{game_id}/resync")
+async def resync_calendar_source(game_id: int, _: None = Depends(require_admin)) -> JSONResponse:
+    game = db.get_game_by_id(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Source not found")
     config = _load_settings().get("pelican_config", {})
-    result = _create_pelican_schedule(config, payload)
+    result = _resync_pelican_source(config, game)
     return JSONResponse(result)
 
 
 @app.get("/api/widgets")
 async def widgets_api() -> JSONResponse:
     return JSONResponse({"widgets": _load_widgets()})
+
+
+@app.post("/api/widgets/create")
+async def create_widget(request: Request, _: None = Depends(require_admin)) -> JSONResponse:
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    widget_key = str(payload.get("widget_key") or "").strip()
+    template = _get_widget_template(widget_key)
+    if not template:
+        raise HTTPException(status_code=400, detail="Unknown widget")
+
+    widgets = db.get_widgets()
+    existing = next((widget for widget in widgets if widget.get("widget_key") == widget_key), None)
+    if existing:
+        if not existing.get("enabled", True):
+            db.update_widget_enabled(widget_key, True)
+            return JSONResponse({"ok": True, "action": "enabled"})
+        return JSONResponse({"ok": True, "action": "exists"})
+
+    max_y = 0
+    if widgets:
+        max_y = max(widget["y"] + widget["h"] - 1 for widget in widgets)
+    db.upsert_widget(
+        widget_key=widget_key,
+        enabled=True,
+        x=1,
+        y=max_y + 1,
+        w=template.get("w", 4),
+        h=template.get("h", 3),
+        config=template.get("config", {}),
+    )
+    return JSONResponse({"ok": True, "action": "created"})
 
 
 @app.post("/api/widgets/layout")

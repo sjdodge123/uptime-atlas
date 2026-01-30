@@ -1,4 +1,12 @@
 <section class="dashboard">
+  {% if is_admin %}
+  <div class="canvas-toolbar">
+    <button class="btn canvas-add" type="button" data-widget-add-open>
+      <span class="canvas-add-icon" aria-hidden="true">+</span>
+      <span>Add widget</span>
+    </button>
+  </div>
+  {% endif %}
   <div class="grid" id="widgetGrid">
     {% for widget in widgets %}
     {% if widget.enabled %}
@@ -14,7 +22,9 @@
       <header class="widget-header">
         <div>
           <div class="widget-title">{{ widget.title }}</div>
+          {% if widget.widget_key != 'calendar' %}
           <div class="widget-meta" id="meta-{{ widget.widget_key }}"></div>
+          {% endif %}
         </div>
       </header>
 
@@ -28,12 +38,12 @@
             <div class="calendar-toolbar">
               <div>
                 <div class="calendar-title" data-calendar-title>Calendar</div>
-                <div class="calendar-subtitle" id="meta-calendar">Syncing schedules...</div>
               </div>
               <div class="calendar-nav">
                 <button class="icon-btn" data-cal-prev title="Previous month">&lt;</button>
                 <button class="icon-btn" data-cal-today title="Today">Today</button>
                 <button class="icon-btn" data-cal-next title="Next month">&gt;</button>
+                <button class="btn subtle calendar-tz" data-calendar-tz type="button">TZ</button>
                 {% if is_admin %}
                 <button class="btn subtle" data-calendar-create type="button">Create</button>
                 {% endif %}
@@ -62,6 +72,11 @@
         {% endif %}
       </div>
       {% if is_admin %}
+      <button class="widget-remove" type="button" data-widget-remove aria-label="Remove widget" title="Remove widget">
+        <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+          <path d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2zm4 0h2v9h-2zM7 9h2v9H7z"/>
+        </svg>
+      </button>
       <div class="widget-handle handle-tl" data-resize="tl"></div>
       <div class="widget-handle handle-tr" data-resize="tr"></div>
       <div class="widget-handle handle-bl" data-resize="bl"></div>

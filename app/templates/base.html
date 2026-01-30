@@ -6,7 +6,7 @@
     <title>{{ title }}</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
-  <body data-admin="{{ 'true' if is_admin else 'false' }}" data-timezone="{{ user_timezone or 'America/New_York' }}">
+  <body data-admin="{{ 'true' if is_admin else 'false' }}" data-timezone="{{ user_timezone or 'America/New_York' }}" data-user="{{ request.session.get('user', '') }}">
     <div class="glow"></div>
     <header class="topbar">
       <div class="brand">
@@ -45,54 +45,125 @@
       <div class="modal-backdrop" data-modal-close></div>
       <div class="modal-card">
         <div class="modal-header">
-          <h3>Create schedule</h3>
+          <h3>Create an event</h3>
           <button class="icon-btn" data-modal-close type="button">✕</button>
         </div>
         <form class="modal-body" data-calendar-form>
           <label>
-            <span>Source</span>
-            <input type="text" name="source" placeholder="Palworld" />
+            <span>Game</span>
+            <input type="text" name="game" placeholder="World of Warcraft" required />
           </label>
           <label>
-            <span>Name</span>
-            <input type="text" name="name" placeholder="UA: Weekly uptime" required />
+            <span>Event name</span>
+            <input type="text" name="name" placeholder="Raid night" required />
           </label>
           <label>
-            <span>Minute</span>
-            <input type="text" name="minute" placeholder="0" required />
+            <span>Description</span>
+            <textarea name="description" rows="3" placeholder="Optional notes for attendees"></textarea>
           </label>
-          <label>
-            <span>Hour</span>
-            <input type="text" name="hour" placeholder="18" required />
-          </label>
-          <label>
-            <span>Day of Month</span>
-            <input type="text" name="day_of_month" placeholder="*" required />
-          </label>
-          <label>
-            <span>Month</span>
-            <input type="text" name="month" placeholder="*" required />
-          </label>
-          <label>
-            <span>Day of Week</span>
-            <input type="text" name="day_of_week" placeholder="1-5" required />
-          </label>
-          <label class="toggle">
-            <input type="checkbox" name="is_active" checked />
-            <span>Active</span>
-          </label>
-          <label class="toggle">
-            <input type="checkbox" name="only_when_online" />
-            <span>Only when online</span>
-          </label>
+          <div class="calendar-basic">
+            <label>
+              <span>Date</span>
+              <input type="date" name="date" required />
+            </label>
+            <label>
+              <span>Start time</span>
+              <input type="time" name="start_time" required />
+            </label>
+            <label>
+              <span>End time</span>
+              <input type="time" name="end_time" required />
+            </label>
+          </div>
           <div class="modal-actions">
-            <button class="btn subtle" type="submit">Create schedule</button>
+            <button class="btn subtle" type="submit">Create event</button>
             <div class="integration-status" data-calendar-status></div>
           </div>
         </form>
       </div>
     </div>
+
+    <div class="modal" data-modal="widget-add">
+      <div class="modal-backdrop" data-modal-close></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Add widget</h3>
+          <button class="icon-btn" data-modal-close type="button">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="widget-picker">
+            <button class="widget-option" type="button" data-widget-type="kuma">
+              <span class="widget-option-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+                  <path d="M4 6h16v12H4zM7 9h6v2H7zm0 4h10v2H7z"/>
+                </svg>
+              </span>
+              <span>
+                <span class="widget-option-title">Uptime Kuma</span>
+                <span class="widget-option-meta">Status bars</span>
+              </span>
+            </button>
+            <button class="widget-option" type="button" data-widget-type="calendar">
+              <span class="widget-option-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+                  <path d="M7 3v2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2V3h-2v2H9V3H7zm12 8H5v8h14z"/>
+                </svg>
+              </span>
+              <span>
+                <span class="widget-option-title">Calendar</span>
+                <span class="widget-option-meta">Schedules overview</span>
+              </span>
+            </button>
+            <button class="widget-option" type="button" data-widget-type="discord">
+              <span class="widget-option-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+                  <path d="M16.9 6.7a10 10 0 0 0-2.7-.8l-.3.6a9.5 9.5 0 0 0-3.8 0l-.3-.6a10 10 0 0 0-2.7.8C5.6 8.7 5.2 10.7 5 12.7c1 1.2 2.3 2.1 3.9 2.7l.5-.8c-.6-.2-1.1-.5-1.6-.9l.4-.3c2.9 1.3 6.1 1.3 9 0l.4.3c-.5.4-1 .7-1.6.9l.5.8c1.6-.6 2.9-1.5 3.9-2.7-.2-2-0.6-4-2.1-6zm-6.2 6.2c-.6 0-1.1-.5-1.1-1.2 0-.7.5-1.2 1.1-1.2.6 0 1.1.5 1.1 1.2 0 .7-.5 1.2-1.1 1.2zm4.5 0c-.6 0-1.1-.5-1.1-1.2 0-.7.5-1.2 1.1-1.2.6 0 1.1.5 1.1 1.2 0 .7-.5 1.2-1.1 1.2z"/>
+                </svg>
+              </span>
+              <span>
+                <span class="widget-option-title">Discord</span>
+                <span class="widget-option-meta">Chat preview</span>
+              </span>
+            </button>
+          </div>
+          <div class="integration-status" data-widget-add-status></div>
+        </div>
+      </div>
+    </div>
     {% endif %}
+
+    <div class="modal" data-modal="timezone">
+      <div class="modal-backdrop" data-modal-close></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Choose timezone</h3>
+          <button class="icon-btn" data-modal-close type="button">✕</button>
+        </div>
+        <div class="modal-body">
+          <label>
+            <span>Timezone</span>
+            <select data-timezone-select></select>
+          </label>
+          <div class="modal-actions">
+            <button class="btn subtle" type="button" data-timezone-save>Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal" data-modal="calendar-details">
+      <div class="modal-backdrop" data-modal-close></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Event details</h3>
+          <button class="icon-btn" data-modal-close type="button">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="calendar-detail-date" data-calendar-detail-date></div>
+          <div class="calendar-detail-list" data-calendar-detail-list></div>
+        </div>
+      </div>
+    </div>
 
     <script src="/static/app.js"></script>
     {% block scripts %}{% endblock %}

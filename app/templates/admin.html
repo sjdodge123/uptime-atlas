@@ -5,18 +5,6 @@
 
 <section class="admin-panel">
   <div class="panel">
-    <h2>Widget Visibility</h2>
-    <div class="toggle-grid">
-      {% for widget in widgets %}
-      <label class="toggle">
-        <input type="checkbox" data-widget-toggle value="{{ widget.widget_key }}" {% if widget.enabled %}checked{% endif %} />
-        <span>{{ widget.title }}</span>
-      </label>
-      {% endfor %}
-    </div>
-  </div>
-
-  <div class="panel">
     <h2>Integrations</h2>
     <div class="integration" data-integration="kuma">
       <div class="integration-header">
@@ -24,7 +12,7 @@
         <button class="btn subtle" data-test-kuma>Test</button>
       </div>
       <div class="form-grid">
-        <label>
+        <label class="form-toggle">
           <span>Enabled</span>
           <input type="checkbox" data-setting="kuma_config.enabled" {% if settings.kuma_config.enabled %}checked{% endif %} />
         </label>
@@ -51,9 +39,16 @@
     <div class="integration" data-integration="pelican">
       <div class="integration-header">
         <h3>Pelican Panel</h3>
+        <button
+          class="btn subtle"
+          data-pelican-resync
+          title="Force resync: re-create all previously deleted events."
+        >
+          Force resync
+        </button>
       </div>
       <div class="form-grid">
-        <label>
+        <label class="form-toggle">
           <span>Enabled</span>
           <input type="checkbox" data-setting="pelican_config.enabled" {% if settings.pelican_config.enabled %}checked{% endif %} />
         </label>
@@ -74,7 +69,9 @@
           <input type="text" data-setting="pelican_config.server_name" value="{{ settings.pelican_config.server_name }}" placeholder="Palworld" />
         </label>
       </div>
-      <div class="integration-status">Schedules load into the calendar widget and can be created from it.</div>
+      <div class="integration-status" data-pelican-status-msg>
+        Pelican schedules sync into calendar events. Local deletes stay local.
+      </div>
     </div>
 
     <div class="integration" data-integration="discord">
@@ -82,7 +79,7 @@
         <h3>Discord</h3>
       </div>
       <div class="form-grid">
-        <label>
+        <label class="form-toggle">
           <span>Enabled</span>
           <input type="checkbox" data-setting="discord_config.enabled" {% if settings.discord_config.enabled %}checked{% endif %} />
         </label>

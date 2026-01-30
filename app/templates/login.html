@@ -3,7 +3,7 @@
 {% block content %}
 <section class="auth">
   <div class="panel auth-card">
-    <h2>Admin Sign In</h2>
+    <h2>Welcome back</h2>
     {% if request.query_params.get('error') %}
       <div class="alert">
         {% if request.query_params.get('error') == 'oauth_denied' %}
@@ -32,22 +32,6 @@
       </div>
     {% endif %}
 
-    {% if oauth_google_enabled or oauth_discord_enabled or oauth_steam_enabled %}
-      <div class="oauth">
-        <div class="oauth-label">Continue with</div>
-        <div class="oauth-buttons">
-          {% if oauth_google_enabled %}
-            <a class="btn oauth-btn google" href="/auth/google/login">Google</a>
-          {% endif %}
-          {% if oauth_discord_enabled %}
-            <a class="btn oauth-btn discord" href="/auth/discord/login">Discord</a>
-          {% endif %}
-          {% if oauth_steam_enabled %}
-            <a class="btn oauth-btn steam" href="/auth/steam/login">Steam</a>
-          {% endif %}
-        </div>
-      </div>
-    {% endif %}
   </div>
 </section>
 {% endblock %}

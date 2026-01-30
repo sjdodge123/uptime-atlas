@@ -1,0 +1,6 @@
+.DS_Store
+app/.DS_Store
+__pycache__/
+app/__pycache__/
+data/uptime_atlas.db
+data_backup_1769740130/uptime_atlas.db

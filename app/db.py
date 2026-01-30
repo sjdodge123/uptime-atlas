@@ -32,6 +32,21 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) 
         cur.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
+def _get_or_create_game_id(conn: sqlite3.Connection, name: str) -> int:
+    game_name = (name or "").strip() or "General"
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO games (name, created_at)
+        VALUES (?, ?)
+        """,
+        (game_name, _utc_now()),
+    )
+    cur.execute("SELECT id FROM games WHERE name = ?", (game_name,))
+    row = cur.fetchone()
+    return int(row["id"]) if row else 0
+
+
 def init_db() -> None:
     conn = connect()
     cur = conn.cursor()
@@ -56,6 +71,15 @@ def init_db() -> None:
     )
     cur.execute(
         """
+        CREATE TABLE IF NOT EXISTS games (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS widgets (
             widget_key TEXT PRIMARY KEY,
             enabled INTEGER NOT NULL,
@@ -68,6 +92,82 @@ def init_db() -> None:
         )
         """
     )
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_events'")
+    has_events = cur.fetchone() is not None
+    if has_events:
+        cur.execute("PRAGMA table_info(calendar_events)")
+        columns = [row["name"] for row in cur.fetchall()]
+        needs_migration = any(column not in columns for column in ("id", "game_id", "event_name", "is_deleted"))
+        if needs_migration:
+            cur.execute("ALTER TABLE calendar_events RENAME TO calendar_events_old")
+            cur.execute(
+                """
+                CREATE TABLE calendar_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    schedule_id TEXT NOT NULL,
+                    game_id INTEGER NOT NULL,
+                    event_name TEXT NOT NULL,
+                    start_utc TEXT NOT NULL,
+                    stop_utc TEXT,
+                    description TEXT,
+                    created_by TEXT,
+                    is_deleted INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_events_schedule_start ON calendar_events (schedule_id, start_utc)"
+            )
+            default_game_id = _get_or_create_game_id(conn, "Imported")
+            cur.execute(
+                """
+                INSERT INTO calendar_events (
+                    schedule_id,
+                    game_id,
+                    event_name,
+                    start_utc,
+                    stop_utc,
+                    description,
+                    created_by,
+                    is_deleted
+                )
+                SELECT
+                    schedule_id,
+                    ?,
+                    COALESCE(schedule_id, 'Legacy Event'),
+                    start_utc,
+                    stop_utc,
+                    description,
+                    created_by,
+                    0
+                FROM calendar_events_old
+                """,
+                (default_game_id,),
+            )
+            cur.execute("DROP TABLE calendar_events_old")
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS calendar_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            schedule_id TEXT NOT NULL,
+            game_id INTEGER NOT NULL,
+            event_name TEXT NOT NULL,
+            start_utc TEXT NOT NULL,
+            stop_utc TEXT,
+            description TEXT,
+            created_by TEXT,
+            is_deleted INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    cur.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_events_schedule_start ON calendar_events (schedule_id, start_utc)"
+    )
+    cur.execute("DROP TABLE IF EXISTS schedule_meta")
+    cur.execute("DROP TABLE IF EXISTS schedule_exclusions")
+    cur.execute("DROP TABLE IF EXISTS source_exclusions")
+    cur.execute("DROP TABLE IF EXISTS schedule_cache")
+    cur.execute("DROP TABLE IF EXISTS local_schedules")
     conn.commit()
     _ensure_column(conn, "users", "role", "role TEXT NOT NULL DEFAULT 'admin'")
     _ensure_column(conn, "users", "timezone", "timezone TEXT NOT NULL DEFAULT 'America/New_York'")
@@ -86,6 +186,50 @@ def get_setting(key: str) -> Optional[Any]:
         return json.loads(row["value"])
     except json.JSONDecodeError:
         return row["value"]
+
+
+def get_game_by_id(game_id: int) -> Optional[Dict[str, Any]]:
+    if not game_id:
+        return None
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name FROM games WHERE id = ?", (int(game_id),))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row["id"], "name": row["name"]}
+
+
+def list_games_with_stats() -> List[Dict[str, Any]]:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            games.id AS id,
+            games.name AS name,
+            COALESCE(SUM(CASE WHEN calendar_events.is_deleted = 0 THEN 1 ELSE 0 END), 0) AS active_count,
+            COALESCE(SUM(CASE WHEN calendar_events.is_deleted = 1 THEN 1 ELSE 0 END), 0) AS deleted_count,
+            COALESCE(SUM(CASE WHEN calendar_events.schedule_id NOT LIKE 'local_%' THEN 1 ELSE 0 END), 0) AS pelican_count
+        FROM games
+        LEFT JOIN calendar_events ON calendar_events.game_id = games.id
+        GROUP BY games.id
+        ORDER BY games.name
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "active_count": int(row["active_count"] or 0),
+            "deleted_count": int(row["deleted_count"] or 0),
+            "pelican_count": int(row["pelican_count"] or 0),
+        }
+        for row in rows
+    ]
 
 
 def get_settings(keys: Iterable[str]) -> Dict[str, Optional[Any]]:
@@ -219,6 +363,258 @@ def list_users() -> List[Dict[str, Any]]:
         {"username": row["username"], "role": row["role"], "timezone": row["timezone"], "created_at": row["created_at"]}
         for row in rows
     ]
+
+
+def get_or_create_game_id(name: str) -> int:
+    conn = connect()
+    game_id = _get_or_create_game_id(conn, name)
+    conn.commit()
+    conn.close()
+    return game_id
+
+
+def insert_calendar_event(
+    schedule_id: str,
+    game_id: int,
+    event_name: str,
+    start_utc: str,
+    stop_utc: Optional[str],
+    description: str,
+    created_by: str,
+) -> int:
+    if not schedule_id or not start_utc or not event_name or not game_id:
+        return 0
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO calendar_events (
+            schedule_id,
+            game_id,
+            event_name,
+            start_utc,
+            stop_utc,
+            description,
+            created_by,
+            is_deleted
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+        """,
+        (
+            str(schedule_id),
+            int(game_id),
+            str(event_name),
+            str(start_utc),
+            stop_utc,
+            description or None,
+            created_by or None,
+        ),
+    )
+    event_id = int(cur.lastrowid or 0)
+    conn.commit()
+    conn.close()
+    return event_id
+
+
+def upsert_calendar_event(
+    schedule_id: str,
+    game_id: int,
+    event_name: str,
+    start_utc: str,
+    stop_utc: Optional[str],
+    description: str,
+    created_by: str,
+) -> None:
+    if not schedule_id or not start_utc or not event_name or not game_id:
+        return
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO calendar_events (
+            schedule_id,
+            game_id,
+            event_name,
+            start_utc,
+            stop_utc,
+            description,
+            created_by,
+            is_deleted
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+        ON CONFLICT(schedule_id, start_utc) DO UPDATE SET
+            game_id = excluded.game_id,
+            event_name = excluded.event_name,
+            stop_utc = excluded.stop_utc,
+            description = excluded.description,
+            created_by = excluded.created_by
+        WHERE calendar_events.is_deleted = 0
+        """,
+        (
+            str(schedule_id),
+            int(game_id),
+            str(event_name),
+            str(start_utc),
+            stop_utc,
+            description or None,
+            created_by or None,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_calendar_events(
+    start_utc: Optional[str] = None,
+    end_utc: Optional[str] = None,
+    include_deleted: bool = False,
+) -> List[Dict[str, Any]]:
+    conn = connect()
+    cur = conn.cursor()
+    clauses = []
+    params: List[Any] = []
+    if not include_deleted:
+        clauses.append("calendar_events.is_deleted = 0")
+    if start_utc:
+        clauses.append("calendar_events.start_utc >= ?")
+        params.append(start_utc)
+    if end_utc:
+        clauses.append("calendar_events.start_utc < ?")
+        params.append(end_utc)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    cur.execute(
+        """
+        SELECT
+            calendar_events.id,
+            calendar_events.schedule_id,
+            calendar_events.game_id,
+            games.name AS game_name,
+            calendar_events.event_name,
+            calendar_events.start_utc,
+            calendar_events.stop_utc,
+            calendar_events.description,
+            calendar_events.created_by
+        FROM calendar_events
+        LEFT JOIN games ON games.id = calendar_events.game_id
+        """
+        f"{where} ORDER BY calendar_events.start_utc ASC",
+        params,
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [
+        {
+            "id": row["id"],
+            "schedule_id": row["schedule_id"],
+            "game_id": row["game_id"],
+            "game_name": row["game_name"] or "",
+            "event_name": row["event_name"],
+            "start_utc": row["start_utc"],
+            "stop_utc": row["stop_utc"],
+            "description": row["description"] or "",
+            "created_by": row["created_by"] or "",
+        }
+        for row in rows
+    ]
+
+
+def get_calendar_event_by_id(event_id: int) -> Optional[Dict[str, Any]]:
+    if not event_id:
+        return None
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            calendar_events.id,
+            calendar_events.schedule_id,
+            calendar_events.game_id,
+            games.name AS game_name,
+            calendar_events.event_name,
+            calendar_events.start_utc,
+            calendar_events.stop_utc,
+            calendar_events.description,
+            calendar_events.created_by,
+            calendar_events.is_deleted
+        FROM calendar_events
+        LEFT JOIN games ON games.id = calendar_events.game_id
+        WHERE calendar_events.id = ?
+        """,
+        (int(event_id),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "schedule_id": row["schedule_id"],
+        "game_id": row["game_id"],
+        "game_name": row["game_name"] or "",
+        "event_name": row["event_name"],
+        "start_utc": row["start_utc"],
+        "stop_utc": row["stop_utc"],
+        "description": row["description"] or "",
+        "created_by": row["created_by"] or "",
+        "is_deleted": bool(row["is_deleted"]),
+    }
+
+
+def mark_calendar_event_deleted(event_id: int) -> None:
+    if not event_id:
+        return
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE calendar_events SET is_deleted = 1 WHERE id = ?", (int(event_id),))
+    conn.commit()
+    conn.close()
+
+
+def mark_calendar_events_deleted_by_game(game_id: int) -> int:
+    if not game_id:
+        return 0
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE calendar_events SET is_deleted = 1 WHERE game_id = ?", (int(game_id),))
+    updated = cur.rowcount or 0
+    conn.commit()
+    conn.close()
+    return updated
+
+
+def delete_calendar_events_by_game(game_id: int) -> None:
+    if not game_id:
+        return
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM calendar_events WHERE game_id = ?", (int(game_id),))
+    conn.commit()
+    conn.close()
+
+
+def delete_calendar_events_in_range(
+    start_utc: str,
+    end_utc: str,
+    exclude_local: bool = True,
+    include_deleted: bool = False,
+) -> None:
+    if not start_utc or not end_utc:
+        return
+    conn = connect()
+    cur = conn.cursor()
+    clauses = ["start_utc >= ?", "start_utc < ?"]
+    params: List[Any] = [start_utc, end_utc]
+    if not include_deleted:
+        clauses.append("is_deleted = 0")
+    if exclude_local:
+        clauses.append("schedule_id NOT LIKE ?")
+        params.append("local_%")
+    cur.execute(
+        f"DELETE FROM calendar_events WHERE {' AND '.join(clauses)}",
+        params,
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_widgets() -> List[Dict[str, Any]]:
